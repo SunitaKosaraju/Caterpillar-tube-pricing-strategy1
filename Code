@@ -1,0 +1,102 @@
+#Sunita/Cesar- CATERPILLAR 28-08-2015
+
+traincat <- read.csv("train_set.csv", header=TRUE)
+testcat <- read.csv("test_set.csv", header=TRUE)
+tube <- read.csv("tube.csv", header=TRUE)
+
+mergetubetrain <- merge(traincat, tube, by="tube_assembly_id")
+mergetubetest <- merge(testcat,tube,by="tube_assembly_id")
+
+str(mergetubetest)
+
+
+
+#feature adjustment
+mergetubetrain$log.quantity<- log(mergetubetrain$quantity)
+mergetubetrain$log.cost<- log(mergetubetrain$cost)
+
+
+#split data into train and test set so that we can calculate RMSE for our supplier analysis.
+install.packages("caTools")
+library("caTools")
+set.seed(100)
+split = sample.split(mergetubetrain$log.cost, SplitRatio = 0.75) 
+training = subset(mergetubetrain, split==TRUE)
+testing= subset(mergetubetrain, split==FALSE)
+
+#subset suppliers
+#merge by major suppliers
+#From a previous exploration, we saw that the R2 improves when we build the linear regression model to correspond to a given supplier.  But we must be careful not to overfit. From the data we see that there are XX major suppliers.  Let us match a linear model to these suppliers and then make an average model for the other suppliers.
+
+table(mergetubetrain$supplier)
+
+#We see that Suppliers 66, 41, 72 are the top three suppliers, accounting for just over 85% of the data with (S-66 accounting for 68%, S-41 accounting for 11%, and S-72 accounting for 7.6% of the data.) 
+#Thus we will create individual linear regression models for these "major suppliers."
+#For the other suppliers, we will allow these tube costs to be predicted by a general linear regression model. This group of "non-major suppliers" accounts for 4020 records (or just under 15% of the data)
+#Note for Caesar, Sunita did this analysis in Excel.
+
+#Major suppliers
+## S-066
+mergetubetrain_66<-subset(training,supplier=="S-0066")
+mergetubetest_66<-subset(testing,supplier=="S-0066")
+
+#this model uses a log of cost
+model66<-lm(log.cost~annual_usage +min_order_quantity +log.quantity +diameter +wall +length +num_bends +num_boss +other, data=mergetubetrain_66)
+
+summary(model66)
+
+##This results in a model that is R2, 70%
+#Calculate RSME
+predictTest66<-predict(model66,newdata=mergetubetest_66,type="response")
+str(predictTest66)
+RMSE=sqrt(mean((predictTest66-mergetubetest_66$log.cost)^2))
+RMSE
+exp(RMSE)
+#this results in an RMSE of 0.4 (for log.cost), which is 1.49 for cost.  (i.e.$1.49)  This could be considered pretty high given that some tubes are only $2.50 (when bought in bulk)
+
+#I did similar calculations for S-041 and S-72.  I found R2 of 45% and 29% respectively.  On this basis, I decided not to further segment the data.
+#Instead, I think we will be better off making a general model for non-S-066 suppliers.  See below!
+
+##General LM model for all suppliers.
+mergetubetrain_OtherSuppliersOnly<-subset(training,!(supplier%in%"S-0066"))
+mergetubetest_OtherSuppliersOnly<-subset(testing,!(supplier%in%"S-0066"))
+
+
+general_model<-lm(log.cost~annual_usage +min_order_quantity +log.quantity +diameter +wall +length  + num_bracket +num_boss +other, data=mergetubetrain_OtherSuppliersOnly)
+
+summary(general_model)
+
+predictTest<-predict(general_model,newdata=mergetubetest_OtherSuppliersOnly,type="response")
+sqrt(mean((predictTest-mergetubetest_OtherSuppliersOnly$log.cost)^2))
+exp(sqrt(mean((predictTest-mergetubetest_OtherSuppliersOnly$log.cost)^2)))
+##results in an R2 of 35%, and RMSE of $1.96 for cost
+
+#CREATE A PREDICTION FOR SUBMISSION
+#This prediction includes use of a unique model for the largest supplier, and a general model for the others
+mergetubetest <- merge(testcat,tube,by="tube_assembly_id")
+mergetubetest$log.quantity<- log(mergetubetest$quantity)
+
+testcat_Supplier66only<-subset(mergetubetest,supplier=="S-0066") #this is 20547 obs
+testcat_AllOtherSuppliers<-subset(mergetubetest,!(supplier%in%"S-0066")) #this is 9688 obs
+
+#here are the relevant predictions for each of our subsets of data (S-66 and non-S-66).  
+#But I don't know how to take care of the log manipulations that we've done to the data...
+#I also don't know how to combine the predictions to make a set for submission...
+predict_forSupplier66only<-predict(model66,newdata=testcat_Supplier66only,type="response")
+predict_forAllOtherSuppliers<-predict(general_model,newdata=testcat_AllOtherSuppliers,type="response")
+
+predict_forSupplier66only<-predict(model66,newdata=testcat_Supplier66only,type="response")
+predict_forAllOtherSuppliers<-predict(general_model,newdata=testcat_AllOtherSuppliers,type="response")
+
+
+final <-cbind(predict_forSupplier66only,predict_forAllOtherSuppliers)
+
+final <-rbind(predict_forSupplier66only,predict_forAllOtherSuppliers)
+
+predict_forSupplier66only[20548:30235] <- predict_forAllOtherSuppliers
+names(predict_forSupplier66only[20548:30235]) <- names(predict_forAllOtherSuppliers)
+Allpredictions<-c(predict_forSupplier66only, predict_forAllOtherSuppliers)
+Allpredictions<-exp(Allpredictions)
+write.csv(Allpredictions, "predictf2.csv")
+
+
